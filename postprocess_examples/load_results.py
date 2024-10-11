@@ -11,7 +11,9 @@ from sklearn.metrics import r2_score as r2
 
 def reorganize_datastructure(eros1):
     """
-    Sometimes we want the data in order of model[basin] rather than basin[model]
+    Sometimes we want the data in order of model[basin] rather than basin[model]. This function reorganizes the 
+    datastructure of eros1 to the latter format.
+
     :eros1: erosion rates exported from the model
     :exln: Length of the dataset (probably this part can be implicit... have not implemented this yet)
     
