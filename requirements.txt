@@ -2,7 +2,6 @@ geopandas==0.14.1
 matplotlib==3.8.2
 multiprocess==0.70.15
 numba==0.58.1
-numba==0.57.0
 numpy==1.24.4
 pandas==2.2.2
 rasterio==1.3.7
