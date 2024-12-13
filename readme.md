@@ -21,9 +21,13 @@ To run the nz_example notebook, you will need to create an EarthEngine account -
 Procedure for EarthEngine acct. creation: \
 1) Run the first cell of the notebook - it should open a browser \
 2) Sign into your Google account \
-3) Create a new GEE project or choose an existing one \
-4) Select all the checkboxes when prompted, to allow the notebook to read, modify, save onto your GEE account \
-5) 
+3) Create a new GEE project \
+4) Choose project name -> select \
+5) Generate token \
+6) Select account again \
+7) "Select what notebook can access" -> Select all
+8) Continue
+9) Copy the code, enter it back into the notebook
 
 
 The resulting files should be saved on your google drive.
