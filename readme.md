@@ -9,7 +9,7 @@ Step 1 is to try the following with conda: \
     conda install multiprocess \
     conda install -c conda-forge rasterio \
     conda install -c conda-forge scikit-learn \
-    conda install -c conda-forge jupyter-lab \
+    conda install -c conda-forge jupyterlab \
     conda install -c conda-forge earthengine-api \
     conda install -c conda-forge rasterio
 
