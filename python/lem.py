@@ -14,8 +14,8 @@ spec = [
     ('dy', float64),
     ('t', float64),
     ('dt', float64),
-    ('nx', int64),
-    ('ny', int64),
+    ('__nx', int64),
+    ('__ny', int64),
     ('A', float64[:, :]),
     ('__Z', float64[:, :]),
     ('k', float64),
@@ -44,16 +44,16 @@ class simple_model:
         self.dy = 1000.0
         self.t = 100e6  # total time (yr)
         self.dt = 1e6  # Time step
-        self.nx = 500  # Number of x grid points
-        self.ny = 500  # Number of y grid points
+        self.__nx = 500  # Number of x grid points
+        self.__ny = 500  # Number of y grid points
         self.D = 0.1
         # Data Structures
-        self.slps = np.ones((self.ny, self.nx), dtype=np.float64)
-        self.__Z = np.random.rand(self.ny, self.nx) * 10  # Elevation
-        self.receiver = np.zeros((self.ny, self.nx), dtype=np.int64) #Receiver grid
+        self.slps = np.ones((self.__ny, self.__nx), dtype=np.float64)
+        self.__Z = np.random.rand(self.__ny, self.__nx) * 10  # Elevation
+        self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64) #Receiver grid
         self.k =  1e-6  # Erodibility
         self.k_grid = np.zeros((0 , 0))
-        self.outlet = np.zeros((self.ny,self.nx))
+        self.outlet = np.zeros((self.__ny,self.__nx))
         # Boundary condition grid, 0 = normal 1 = outlet
         self.__BCX = np.zeros(np.shape(self.__Z), dtype=np.int8)
         self.__BCX[:, 0] = 1  # by default set all edges as outlets
@@ -75,30 +75,29 @@ class simple_model:
         Fill pits using the priority flood method of Barnes et al., 2014.
         """
         c = int(0)
-        nn = self.nx * self.ny
+        nn = self.__nx * self.__ny
         p = int(0)
         closed = np.full(nn, False)
         pit = np.zeros(nn, dtype=np.int32)
-        idx = [1, -1, self.ny, -self.ny, -self.ny + 1, -self.ny - 1,
-               self.ny + 1, self.ny - 1]  # Linear indices of neighbors
+        idx = [1, -1, self.__ny, -self.__ny, -self.__ny + 1, -self.__ny - 1,
+               self.__ny + 1, self.__ny - 1]  # Linear indices of neighbors
         open = pq(self.__Z.transpose().flatten())
         for i in range(len(self.__BC)):
             open = open.push(self.__BC[i])
             closed[self.__BC[i]] = True
             c += 1
-        for i in range(0, self.ny):
-            for j in range(0, self.nx):
+        for i in range(0, self.__ny):
+            for j in range(0, self.__nx):
                 if (i == 0) or (j == 0) or (
-                        j == self.nx - 1) or (i == self.ny - 1):
+                        j == self.__nx - 1) or (i == self.__ny - 1):
                     # In this case only edge cells, and those below sea level
                     # (base level) are added
-                    ij = j * self.ny + i
+                    ij = j * self.__ny + i
                     if not closed[ij]:
                         closed[ij] = True
                         open = open.push(ij)
                         c += 1
         s = int(0)
-
         si = int(0)
         ij = int(0)
         ii = int(0)
@@ -119,21 +118,21 @@ class simple_model:
                 p -= 1
 
                 if pittop == -9999:
-                    si, sj = self.lind(s, self.ny)
+                    si, sj = self.lind(s, self.__ny)
                     pittop = self.__Z[si, sj]
             else:
                 s = int(open.top())
                 open = open.pop()
                 c -= 1
                 pittop = -9999
-            si, sj = self.lind(s, self.ny)  # Current
+            si, sj = self.lind(s, self.__ny)  # Current
             count1 += 1
 
             for i in range(8):
                 ij = idx[i] + s
-                ii, jj = self.lind(ij, self.ny)  # Neighbor
+                ii, jj = self.lind(ij, self.__ny)  # Neighbor
                 if ((ii >= 0) and (jj >= 0) and (
-                        ii < self.ny) and (jj < self.nx)):
+                        ii < self.__ny) and (jj < self.__nx)):
                     if not closed[ij]:
                         closed[ij] = True
                         if self.__Z[ii, jj] <= self.__Z[si, sj]:
@@ -148,8 +147,7 @@ class simple_model:
                             c += 1
         return
 
-    @staticmethod
-    def lind(xy, n:float64):
+    def lind(self, xy, n:float64):
         """
         compute bilinear index from linear indices - trivial but widely used (hence the separate function)
 
@@ -178,20 +176,19 @@ class simple_model:
 
         """
         ny, nx = np.shape(bc)
-        if (ny, nx) != np.shape(self.__BCX):
-            raise ValueError("Wrong size for Boundary Condition grid. Must be same size as Z. Maybe you have not yet set Z?")
-        if np.any(bc.ravel()>0):
-            print(np.shape(bc))
-            print(np.shape(self.__Z))
+        print([ny,nx])
+        print(self.__ny,self.__nx)
+        print(np.shape(self.__Z))
+        if (ny, nx) != np.shape(self.__Z):
+            raise ValueError("Wrong size for Boundary Condition grid."
+            " bc matrix must be same size as Z. Maybe you have not yet set Z?")
+        if np.any(bc.ravel() > 0):
             self.__BCX = np.zeros(np.shape(self.__Z), dtype=np.int8)
-            
             # Have to do this loop because of unresolved type casting issues with numba and int8
             for i in range(ny):
                 for j in range(nx):
                     if bc[i,j] > 0:
                         self.__BCX[i,j] = 1
-
-
             self.__BC = np.where(self.__BCX.ravel() == 1)[0]
 
         return
@@ -203,10 +200,14 @@ class simple_model:
         Set the elevation and resizes other grids correspondingly
         """
         ny, nx = np.shape(Z)
-        if (self.ny, self.nx) != (ny, nx):
-            print('here')
+        try:
+            self.__Z = Z
+        except:
+            raise ValueError("Z is not np.float64")
+        if (self.__ny, self.__nx) != (ny, nx):
             if len(self.k_grid)>0:
                 self.k_grid = np.zeros((ny, nx), dtype=np.float64) + self.k
+                print("k grid resized and reset to default k value")
 
             self.slps = np.zeros((ny, nx), dtype=np.float64)
             self.__BCX = np.zeros((ny, nx), dtype=np.int8)
@@ -214,14 +215,12 @@ class simple_model:
             self.__BCX[:, -1] = 1
             self.__BCX[0, :] = 1
             self.__BCX[-1, :] = 1
+            self.set_bc(self.__BCX)
+            print('Boundary condition values have been reset')
 
-        self.ny, self.nx = (ny, nx)
-        try:
-            self.__Z = Z
-        except:
-            raise ValueError("Z is not np.float64")
+        self.__ny = ny
+        self.__nx = nx
         
-        print("k grid resized and reset uniformly to default (k value)")
      
     def get_z(self):
         return self.__Z
@@ -230,25 +229,24 @@ class simple_model:
         """
         D8 slopes
         """
-        eps = 1e-20
+        eps = 1e-20 # The e value for sinks i.e. dz from grid point to neighboring grid point within flats
         ij = 0
         c = 0
-        self.receiver = np.zeros((self.ny, self.nx), dtype=np.int64)
-        for i in range(0, self.ny):
-            for j in range(0, self.nx):
-                #print('here')
-                ij = j * self.ny + i
+        self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64)
+        for i in range(0, self.__ny):
+            for j in range(0, self.__nx):
+                ij = j * self.__ny + i
                 mxi = 0
                 self.receiver[i, j] = ij
 
-                if (0 < i < self.ny and j > 0 and j <
-                        self.nx - 1 and i < self.ny - 1 and not self.__BCX[i,j]):
+                if (0 < i < self.__ny and j > 0 and j <
+                        self.__nx - 1 and i < self.__ny - 1 and not self.__BCX[i,j]):
                     for i1 in range(-1, 2):
                         for j1 in range(-1, 2):
                             mp = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / (np.sqrt(
                                 (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2) + eps)  # In case slope iz zero, we add 1e-10 to ensure no div by 0
-                            if mp  > mxi: # Added 1e-30 before but this may not be necessary
-                                ij2 = (j + j1) * self.ny + i1 + i
+                            if mp  > mxi: 
+                                ij2 = (j + j1) * self.__ny + i1 + i
                                 mxi = mp
 
                                 self.slps[i, j] = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / np.sqrt(
@@ -269,24 +267,24 @@ class simple_model:
         """
         ij = 0
         c = 0
-        fnd = np.zeros((self.ny, self.nx))
-        self.receiver = np.zeros((self.ny, self.nx), dtype=np.int64)
+        fnd = np.zeros((self.__ny, self.__nx))
+        self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64)
         if self.__dynamic_bc: #We must do this at every step to ensure we have the BCs, the computational cost is low...
             self.__BC = np.where(self.__Z.ravel() <= 0)
             self.__BCX.ravel()[self.__BC] = 1
-        for i in range(0, self.ny):
-            for j in range(0, self.nx):
-                ij = j * self.ny + i
+        for i in range(0, self.__ny):
+            for j in range(0, self.__nx):
+                ij = j * self.__ny + i
                 mxi = 0
                 self.receiver[i, j] = ij
-                if 0 < i < self.ny and 0 < j < self.nx - 1 and i < self.ny - 1 and self.Z[i,j]>=0:
+                if 0 < i < self.__ny and 0 < j < self.__nx - 1 and i < self.__ny - 1 and self.Z[i,j]>=0:
                     for i1 in range(-1, 2):
                         for j1 in range(-1, 2):
                             if self.__Z[i + i1, j + j1] > 0:
                                 mp = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / np.sqrt(
                                     (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2 + 1e-10)
                                 if mp > mxi:
-                                    ij2 = (j + j1) * self.ny + i1 + i
+                                    ij2 = (j + j1) * self.__ny + i1 + i
                                     mxi = mp
                                     self.slps[i, j] = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / np.sqrt(
                                         (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2 + 1e-10)
@@ -305,49 +303,49 @@ class simple_model:
 
         :return: topologically ordered stack
         """
-        self.stackij = np.zeros(self.ny * self.nx, dtype=np.int64)
+        self.stackij = np.zeros(self.__ny * self.__nx, dtype=np.int64)
         if self.pour_point[1] > -1:
-            for i in range(0, self.ny):
-                for j in range(0, self.nx):
-                    ij = j * self.ny + i
+            for i in range(0, self.__ny):
+                for j in range(0, self.__nx):
+                    ij = j * self.__ny + i
                     if self.receiver[i,j] == ij:
                         self.receiver[i,j]=-1
-            self.receiver[int(self.pour_point[0]), int(self.pour_point[1])] = self.pour_point[1] * self.ny + self.pour_point[0]
+            self.receiver[int(self.pour_point[0]), int(self.pour_point[1])] = self.pour_point[1] * self.__ny + self.pour_point[0]
 
         c = 0
         k = 0
-        for i in range(0, self.ny):
-            for j in range(0, self.nx):
+        for i in range(0, self.__ny):
+            for j in range(0, self.__nx):
 
-                ij = j * self.ny + i
+                ij = j * self.__ny + i
                 i2 = i
                 j2 = j
                 if self.receiver[i, j] == ij:
                     self.stackij[c] = ij
                     c += 1
-                    while k < c <= self.ny * self.nx - 1:
+                    while k < c <= self.__ny * self.__nx - 1:
                         for i1 in range(-1, 2):
                             for j1 in range(-1, 2):
-                                if 0 < j2 + j1 < self.nx - 1 and 0 < i2 + i1 < self.ny - 1:
+                                if 0 < j2 + j1 < self.__nx - 1 and 0 < i2 + i1 < self.__ny - 1:
 
-                                    ij2 = (j2 + j1) * self.ny + i2 + i1
+                                    ij2 = (j2 + j1) * self.__ny + i2 + i1
                                     if ij != ij2 and self.receiver[i2 + i1, j2 + j1] == ij:
                                         self.stackij[c] = ij2
                                         c += 1
                         k = k + 1
                         ij = self.stackij[k]
-                        i2, j2 = self.lind(ij, self.ny)
+                        i2, j2 = self.lind(ij, self.__ny)
 
     def acc(self, init=np.ones([1, 1])):
         """
         Takes the stack and receiver grids and computes drainage area.
 
         """
-        self.A = np.ones((self.ny, self.nx), dtype=np.float64)
+        self.A = np.ones((self.__ny, self.__nx), dtype=np.float64)
         self.A[:, :] = init[:, :]
         for ij in range(len(self.stackij) - 1, 0, -1):
-            i, j = self.lind(self.stackij[ij], self.ny)
-            i2, j2 = self.lind(self.receiver[i, j], self.ny)
+            i, j = self.lind(self.stackij[ij], self.__ny)
+            i2, j2 = self.lind(self.receiver[i, j], self.__ny)
             if self.stackij[ij] != self.receiver[i, j]:
                 self.A[i2, j2] += self.A[i, j]
 
@@ -369,8 +367,8 @@ class simple_model:
             useKGrid = True
         for ij in range(0, len(self.stackij)):
 
-            i, j = self.lind(self.stackij[ij], self.ny)
-            i2, j2 = self.lind(self.receiver[i, j], self.ny)
+            i, j = self.lind(self.stackij[ij], self.__ny)
+            i2, j2 = self.lind(self.receiver[i, j], self.__ny)
             if useKGrid: #If we use variable k in a grid....
                k = self.k_grid[i2, j2]
             if (i2 != i) | (j2 != j):
@@ -398,15 +396,15 @@ class simple_model:
 
         :returns: erosion rate grid
         """
-        E = np.zeros((self.ny, self.nx))
+        E = np.zeros((self.__ny, self.__nx))
         k = self.k
         useKGrid = False
         if len(self.k_grid > 0):
             useKGrid = True
         for ij in range(0, len(self.stackij)):
 
-            i, j = self.lind(self.stackij[ij], self.ny)
-            i2, j2 = self.lind(self.receiver[i, j], self.ny)
+            i, j = self.lind(self.stackij[ij], self.__ny)
+            i2, j2 = self.lind(self.receiver[i, j], self.__ny)
             if  useKGrid: #If we use variable k in a grid...
                 k = self.k_grid[i2, j2]
             if (i2 != i) | (j2 != j):
@@ -414,7 +412,7 @@ class simple_model:
                     f = self.dt * (self.dx * self.dy) ** self.m
                     E[i, j] = k * f * \
                        self.A[i, j] ** self.m * self.slps[i, j]** self.n
-        self.__Z-=E
+        self.__Z -= E
         # self.__Z[:, -1] = 0
         # self.__Z[:, 0] = 0
         # self.__Z[-1, :] = 0
@@ -428,13 +426,13 @@ class simple_model:
         Calculate chi based on the inputs
         """
 
-        self.chi = np.zeros((self.ny, self.nx), dtype=np.float64)
+        self.chi = np.zeros((self.__ny, self.__nx), dtype=np.float64)
         dA = (self.dx * self.dy) ** self.m
-        U = np.ones((self.ny, self.nx))
+        U = np.ones((self.__ny, self.__nx))
         U[:, :] = U1
         for ij in range(len(self.I)):
-            i, j = self.lind(self.I[ij], self.ny)
-            i2, j2 = self.lind(self.s[i, j], self.ny)
+            i, j = self.lind(self.I[ij], self.__ny)
+            i2, j2 = self.lind(self.s[i, j], self.__ny)
             ds = np.sqrt(((i - i2) * self.dy)**2 + ((j - j2) * self.dx)**2)
             if (self.s[i2, j2] == self.s[i, j]):
                 self.chi[i, j] = self.Z[i, j] * elev_fact
