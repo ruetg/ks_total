@@ -39,7 +39,7 @@ Example Dems are pre-loaded into the "example_data/dem" folder
 
 Results can be plotted using postprocess_examples
 
-
+Tests must be run out of the ./unit_tests folder
 
 
 

@@ -68,20 +68,15 @@ class PQ:
         self.__u = 2  # End of right hand side (initially we just have 2 sides with 1 element each)
         self.__ul = np.int64(self.__u / 2)  # end of left hand side
         if self.__numel==3:
-            #print(self.__z[self.__indices])
-
             if self.__z[self.__indices[2]] < self.__z[self.__indices[1]]:
                 t = self.__indices[2]
                 self.__indices[2] = self.__indices[1]
                 self.__indices[1] = t
             self.__numel -= 1
-            #print(self.__z[self.__indices])
-
             return self
 
         
         while self.__u <= self.__numel-1:
-            #print(self.__u)
             # Is the end of the current right side less than the end of the next left side? If so, we stay with the current set of sides
             m = self.__u
             if  (self.__u < self.__numel-1) & (self.__z[self.__indices[self.__u]] > self.__z[self.__indices[self.__u + 1]]):
@@ -89,8 +84,7 @@ class PQ:
             if self.__z[self.__indices[self.__ul]] > self.__z[self.__indices[m]]:
                 
                 t = self.__indices[m]
-               # print('#{}'.format(m))
-               # print('#{}'.format(self.__numel))
+
                 self.__indices[m] = self.__indices[self.__ul]
                 self.__indices[self.__ul]=t
                 self.__u = 2 * (m)
@@ -99,8 +93,7 @@ class PQ:
             else:
 
                 break
-#         print(self.__z[self.__indices])
-#         print(self.__indices)
+
 
         self.__numel -= 1
 
@@ -132,7 +125,6 @@ class PQ:
 
         while self.__ul > 0:
             # If end left is greater than end right, switch end left and end right.
-            print(self.__indices[self.__u])
             if self.__z[self.__indices[self.__ul]] >= self.__z[self.__indices[self.__u]]:
 
                 t = self.__indices[self.__ul]
@@ -144,11 +136,5 @@ class PQ:
             # Now break up the current left hand side into new halves, repeat).
             self.__u = np.int64(self.__u / 2)
             self.__ul = np.int64(self.__u / 2)
-#         if self.__numel>=2:
-#             if self.__z[self.__indices[self.__numel]]< self.__z[self.__indices[self.__numel-1]]:
-#                 t=self.__z[self.__indices[self.__numel]]
-#                 self.__z[self.__indices[self.__numel-1]] = self.__z[self.__indices[self.__numel]]
-#                 self.__z[self.__indices[self.__numel]] = t
-        #sprint(self.__z[self.__indices])
 
         return self
