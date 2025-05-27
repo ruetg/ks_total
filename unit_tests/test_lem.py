@@ -44,23 +44,13 @@ class TestLandscapeEvolution(unittest.TestCase):
         self.assertEqual(self.model.receiver[1,1], 2) # The receiver of the center should be upper right
 
     def test_sinkfill(self):
-        #A large array with a pit
-        z = np.zeros((100,100)) + 100
+        # A large array with a pit
+        z = np.random.rand(100,100) + 100
         z[40:60,40:60] = 0
         self.model.set_z(z.copy())
         self.model.sinkfill()
-        nsinks = self.model.slp() #The slp method returns the number of sinks
+        nsinks = self.model.slp() # The slp method returns the number of sinks
         self.assertEqual(nsinks,0)
-
-
-
-
-    # def test_slp_basin(self):
-    #     # This test is difficult to automate fully due to the complex calculations.
-    #     # Instead, we'll check some basic conditions.
-    #     self.model.slp_basin()
-    #     self.assertTrue(self.model.receiver.size == self.model.ny * self.model.nx)
-
     def test_stack(self):  
         z_test= np.zeros((5,6),dtype=np.float64)+([ #The hand-calculated stack
                  [0,0,1,0,1,2],
@@ -180,11 +170,6 @@ class TestLandscapeEvolution(unittest.TestCase):
 
         self.assertTrue(np.mean(E_implicit)>1e-17)
         self.assertAlmostEqual(np.mean(E_implicit), np.mean(E_explicit),5)
-
-    # def test_chicalc(self):
-    #     """Test the chicalc method."""
-    #     self.model.chicalc()
-    #     self.assertTrue(self.model.chi.size == self.model.ny * self.model.nx)
 
     def test_diffusion(self):
            

@@ -4,6 +4,7 @@ from numba import jit, int64, float64, bool_, int8
 import math
 from numba_pq import PQ as pq
 import warnings
+import matplotlib.pyplot as plt
 # Define jitclass parameters
 ### Todo - consistent row-major c style indexing
 
@@ -66,7 +67,7 @@ class simple_model:
         self.__dynamic_bc = False # dynamic baselevel
         # Convert the boundary condition grid to linear (for speed in some
         # cases)
-        self.__BC = np.where(self.__BCX == 1)[0]
+        self.__BC = np.where(self.__BCX.ravel() == 1)[0]
         self.pour_point = np.int64([-1,-1]) #Pour_point is an (y,x) coordinate of the pour point if applicable - for drainage extraction
 
 
@@ -74,6 +75,7 @@ class simple_model:
         """
         Fill pits using the priority flood method of Barnes et al., 2014.
         """
+        eps = 1e-7 #Minimum elevation difference between adjacent cells
         c = int(0)
         nn = self.__nx * self.__ny
         p = int(0)
@@ -139,7 +141,7 @@ class simple_model:
                             # This (e) is sufficiently small for most DEMs but
                             # it's not the lowest possible.  In case we are
                             # using 32 bit, I keep it here.
-                            self.__Z[ii, jj] = self.__Z[si, sj] + 1e-8 * np.random.rand() + 1e-6 #the e value with some randomness- we can adjust this
+                            self.__Z[ii, jj] = self.__Z[si, sj] + 1e-8 * np.random.rand() + eps #the e value with some randomness- we can adjust this
                             pit[p] = ij
                             p += 1
                         else:
@@ -161,10 +163,16 @@ class simple_model:
     
     def turn_on_off_dynamic_bc(self, dynamic_bc):
         self.__dynamic_bc = dynamic_bc
+        #ny, nx = np.shape(self.__Z)
         if self.__dynamic_bc:
-            self.__BCX = self.__Z <= 0
+            for i in range(1,self.__ny-1):
+                for j in range(1,self.__nx-1):
+                    if self.__Z[i,j] <= 0:
+                        self.__BCX[i,j] = 1
+                    else:
+                        self.__BCX[i,j] = 0
             self.__BC = np.where(self.__BCX.transpose().ravel() == 1)[0]
-            
+
         return
     
     def set_bc(self, bc:int8[:,:]):
@@ -193,6 +201,8 @@ class simple_model:
 
         return
 
+
+
     def set_z(self, Z:float64[:,:]):
         """
         :param Z: New elevation grid
@@ -210,11 +220,13 @@ class simple_model:
                 print("k grid resized and reset to default k value")
 
             self.slps = np.zeros((ny, nx), dtype=np.float64)
+    
             self.__BCX = np.zeros((ny, nx), dtype=np.int8)
             self.__BCX[:, 0] = 1
             self.__BCX[:, -1] = 1
             self.__BCX[0, :] = 1
             self.__BCX[-1, :] = 1
+
             self.set_bc(self.__BCX)
             print('Boundary condition values have been reset')
 
@@ -233,6 +245,9 @@ class simple_model:
         ij = 0
         c = 0
         self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64)
+        if self.__dynamic_bc: #We must do this at every step to ensure we have the BCs, the computational cost is low...
+            self.turn_on_off_dynamic_bc(True)
+            print('here')
         for i in range(0, self.__ny):
             for j in range(0, self.__nx):
                 ij = j * self.__ny + i
@@ -240,11 +255,12 @@ class simple_model:
                 self.receiver[i, j] = ij
 
                 if (0 < i < self.__ny and j > 0 and j <
-                        self.__nx - 1 and i < self.__ny - 1 and not self.__BCX[i,j]):
+                        self.__nx - 1 and i < self.__ny - 1 and not self.__BCX[i,j]
+                          and not(np.isnan(self.__Z[i,j]))):
                     for i1 in range(-1, 2):
                         for j1 in range(-1, 2):
                             mp = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / (np.sqrt(
-                                (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2) + eps)  # In case slope iz zero, we add 1e-10 to ensure no div by 0
+                                (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2) + eps)  # In case slope if zero, we add eps to ensure no div by 0
                             if mp  > mxi: 
                                 ij2 = (j + j1) * self.__ny + i1 + i
                                 mxi = mp
@@ -254,45 +270,43 @@ class simple_model:
                                 self.receiver[i, j] = ij2
 
                     if mxi == 0:
-                        self.outlet[i,j]=1
                         c += 1
         return c
 
 
-    def slp_basin(self):
-        """
-        This is a version of the D8 network calculation which excludes adding receivers to
-        the stack which are at or below 0 elevation - ideal for basins in which we want to
-        remove elements of the landscape that are not part of the basin of interest.
-        """
-        ij = 0
-        c = 0
-        fnd = np.zeros((self.__ny, self.__nx))
-        self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64)
-        if self.__dynamic_bc: #We must do this at every step to ensure we have the BCs, the computational cost is low...
-            self.__BC = np.where(self.__Z.ravel() <= 0)
-            self.__BCX.ravel()[self.__BC] = 1
-        for i in range(0, self.__ny):
-            for j in range(0, self.__nx):
-                ij = j * self.__ny + i
-                mxi = 0
-                self.receiver[i, j] = ij
-                if 0 < i < self.__ny and 0 < j < self.__nx - 1 and i < self.__ny - 1 and self.Z[i,j]>=0:
-                    for i1 in range(-1, 2):
-                        for j1 in range(-1, 2):
-                            if self.__Z[i + i1, j + j1] > 0:
-                                mp = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / np.sqrt(
-                                    (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2 + 1e-10)
-                                if mp > mxi:
-                                    ij2 = (j + j1) * self.__ny + i1 + i
-                                    mxi = mp
-                                    self.slps[i, j] = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / np.sqrt(
-                                        (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2 + 1e-10)
-                                    self.receiver[i, j] = ij2
-                    if mxi == 0:
-                        c += 1
-                        fnd[i, j] = 1
-        return fnd
+    # def slp_basin(self):
+    #     """
+    #     This is a version of the D8 network calculation which excludes adding receivers to
+    #     the stack which are at or below 0 elevation - ideal for basins in which we want to
+    #     remove elements of the landscape that are not part of the basin of interest.
+    #     """
+    #     ij = 0
+    #     c = 0
+    #     fnd = np.zeros((self.__ny, self.__nx))
+    #     self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64)
+    #     if self.__dynamic_bc: #We must do this at every step to ensure we have the BCs, the computational cost is low...
+    #         self.turn_on_off_dynamic_bc(True)
+    #     for i in range(0, self.__ny):
+    #         for j in range(0, self.__nx):
+    #             ij = j * self.__ny + i
+    #             mxi = 0
+    #             self.receiver[i, j] = ij
+    #             if 0 < i < self.__ny and 0 < j < self.__nx - 1 and i < self.__ny - 1 and self.Z[i,j]>=0:
+    #                 for i1 in range(-1, 2):
+    #                     for j1 in range(-1, 2):
+    #                         if self.__Z[i + i1, j + j1] > 0:
+    #                             mp = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / np.sqrt(
+    #                                 (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2 + 1e-10)
+    #                             if mp > mxi:
+    #                                 ij2 = (j + j1) * self.__ny + i1 + i
+    #                                 mxi = mp
+    #                                 self.slps[i, j] = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / np.sqrt(
+    #                                     (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2 + 1e-10)
+    #                                 self.receiver[i, j] = ij2
+    #                 if mxi == 0:
+    #                     c += 1
+    #                     fnd[i, j] = 1
+    #     return fnd
 
     def stack(self):
         """
@@ -413,10 +427,7 @@ class simple_model:
                     E[i, j] = k * f * \
                        self.A[i, j] ** self.m * self.slps[i, j]** self.n
         self.__Z -= E
-        # self.__Z[:, -1] = 0
-        # self.__Z[:, 0] = 0
-        # self.__Z[-1, :] = 0
-        # self.__Z[0, :] = 0
+
         return E
 
     def chicalc(self, U1:float64=1.0, elev_fact=0):
@@ -474,194 +485,3 @@ class simple_model:
             t_tot += courant_t
             self.__Z -= E
         return E
-
-
-# @jit(nopython=True)
-# def lind(xy, n):
-#     """
-#     Non - object oriented version of function for parallelization (Python does not allow pickled JIT class
-#     Compute bilinear index from linear indices - trivial but widely used (hence the separate function)
-
-#     :param xy:  linear index
-#     :param n: ny or nx (depending on row-major or col-major indexing)
-#     :return:
-#     """
-#     x = math.floor(xy / n)
-#     y = xy % n
-#     return y, x
-
-
-# @jit(nopython=True)
-# def erode_explicit(
-#         slps,
-#         I,
-#         s,
-#         A,
-#         E,
-#         dx=90,
-#         dy=90,
-#         m=0.45,
-#         n=1.0,
-#         k=1e-8,
-#         dt=1,
-#         carea=0,
-#         G=0):
-#     """
-
-#     :param G: Transport capacity coefficient of Yuan et al. (2019)
-#     :param ny: y grid size
-#     :param nx: x grid size
-#     :param I: fastscape stack
-#     :param s: list of receivers for the stack
-#     :dx: x resolution
-#     :dy: y resolution
-#     :m: Stream power m
-#     :n: stream power n
-#     :k: stream power k
-#     :slps: Grid of slopes for steepest descent
-#     :dt: time resolution
-#     :A: Grid of drainage areas
-#     :E: Erosion rate grid (can be input based on previous result, otherwise set to zero)
-#     :carea: critical area
-#     :return: Fluvial Erosion map
-
-#     Fluvial erosion using explicit form of transport limited eqn.  Seperated from the main class so that it can
-#     be parallelized
-#     """
-#     ny, nx = np.shape(slps)
-#     sedacc = np.zeros((ny, nx))
-#     f = (dx * dy) ** m
-
-#     for ij in range(len(I) - 1, 0, -1):
-
-#         i, j = lind(I[ij], ny)
-#         i2, j2 = lind(s[i, j], ny)
-#         if A[i, j] > carea:
-#             E[i, j] += k[i2, j2] * f * \
-#                 np.power(A[i, j], m) * np.power(slps[i, j], n) - G * sedacc[i, j] / A[i, j]
-#         sedacc[i2, j2] += E[i, j]
-#     E *= dt
-
-#     return E
-
-# def smooth(windowSize,I,s,z,acc,athres=5):
-    
-#     zsd = np.zeros((windowSize,len(I)))
-#     zsu = np.zeros((windowSize,len(I)))
-#     avgs=np.zeros(len(I))
-#     distsU=np.zeros(len(I))
-#     distsD = np.zeros(len(I))
-#     ns = np.zeros(len(I))
-#     amaxs = np.zeros(len(I))
-#     for i in range(len(I)):
-#         if s[i] != I[i]:
-#             zsd[:-1,I[i]] = zsd[1:,s[i]]
-#             zsd[-1,I[i]] = z[s[i]]
-#     for i in range(len(I)-1,0,-1):
-#         if s[i] != I[i]:
-#             if (acc[I[i]] >= windowSize) and (acc[I[i]] >= amaxs[s[i]]):
-#                 amaxs[s[i]] = acc[I[i]]
-#                 zsu[:,s[i]] = zsu[:,I[i]]
-#                 zsu[:-1,s[i]] = zsu[1:,I[i]]
-#                 zsu[-1,s[i]] = z[I[i]]
-#     for i in range(len(I)):
-#         lu = len(np.where(zsu[:,i]>0)[0])
-#         ld = len(np.where(zsd[:,i]>0)[0])
-#         minl = min([lu,ld])
-#         if minl>=windowSize:
-#             avgs[i] = np.mean(np.concatenate([zsd[:,i][zsd[:,i]>0], zsu[:,i][zsu[:,i]>0]]))
-#         elif minl>=1:
-#             avgs[i] = np.mean(np.concatenate([zsd[:,i][zsd[:,i]>0][-minl:], zsu[:,i][zsu[:,i]>0][-minl:]]))
-#         else:
-#             avgs[i] = z[i]
-#     return avgs
-
-
-
-# @jit(nopython=True)
-# def diffuse(Z, D=1.0, dy=90, dx=90, dt=1):
-#     """
-#     Explicit diffusion for hillslopes
-
-#     :param D: Diffusivity
-#     :param Z: Elevation
-#     :param dy: x resolution
-#     :param dt: time resolution
-
-#     """
-#     ny, nx = np.shape(Z)
-#     E = np.zeros((ny, nx))
-#     for i in range(1, ny - 1):
-#         for j in range(1, nx - 1):
-#             zijp = Z[i, j + 1]
-#             zijm = Z[i, j - 1]
-#             zimj = Z[i - 1, j]
-#             zipj = Z[i + 1, j]
-
-#             if zijp <= 0:
-#                 zijp = Z[i, j]
-#             if zijm <= 0:
-#                 zijm = Z[i, j]
-#             if zimj <= 0:
-#                 zimj = Z[i, j]
-#             if zipj <= 0:
-#                 zipj = Z[i, j]
-
-#             E[i, j] = D * ((2 * Z[i, j] -
-#                             zipj -
-#                             zimj) /
-#                            (dy ** 2) +
-#                            (2 * Z[i, j] - zijp - zijm)
-#                            / (dx ** 2))
-
-#     E *= dt
-
-#     return E
-
-
-# @jit(nopython=True)
-# def acc(I, s, init=1):
-#     """
-#     Calculate drainage area or sum some input quantity (e.g. sediment) along the stack
-
-#     :param init: Initial quantity to sum (default is ones)
-
-#     """
-#     ny, nx = np.shape(s)
-#     A = np.ones((ny, nx))
-
-#     if len(init) >= 1:
-#         A[:, :] = init[:, :]
-#     for ij in range(len(I) - 1, 0, -1):
-#         i, j = lind(I[ij], ny)
-#         i2, j2 = lind(s[i, j], ny)
-#         if I[ij] != s[i, j]:
-#             A[i2, j2] += A[i, j]
-#     return A
-
-
-# if __name__ == '__main__':
-#     # An example run
-#     F = simple_model()
-#     fig = plt.figure()
-
-#     for t in range(0, int(F.t / F.dt)):  # main loop
-#         start = timeit.default_timer()
-#         F.sinkfill()
-#         F.slp()
-#         F.stack()
-#         F.acc()
-#         F.erode()
-#         F.Z += 1
-#         F.Z[:, 0] = 0
-#         F.Z[:, -1] = 0
-#         F.Z[0, :] = 0
-#         F.Z[-1, :] = 0
-#         end = timeit.default_timer()
-
-#         a = plt.imshow(F.Z)
-#         plt.colorbar(a)
-
-#         plt.pause(.05)
-#         plt.clf()
-
