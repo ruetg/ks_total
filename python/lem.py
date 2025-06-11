@@ -32,7 +32,11 @@ spec = [
     ('pour_point', int64[:]),
     ('D',float64),
     ('outlet',float64[:,:]),
-    ('__dynamic_bc', bool_)]
+    ('__dynamic_bc', bool_),
+    ('a_crit', float64),
+    ('U', float64[:,:]),
+    ('Esum', float64[:,:]),
+    ('G',float64)]
 
 
 @jitclass(spec)
@@ -40,6 +44,7 @@ class simple_model:
     def __init__(self):
         # Model parameters
         self.m = 0.45  # Drainage area exponent
+        self.G = 0 # sediment transport coeffieicnet (Yuan et al., 2019)
         self.n = 1.0
         self.dx = 1000.0  # grid spacing (m)
         self.dy = 1000.0
@@ -48,8 +53,12 @@ class simple_model:
         self.__nx = 500  # Number of x grid points
         self.__ny = 500  # Number of y grid points
         self.D = 0.1
+
+        self.a_crit = 0
         # Data Structures
         self.slps = np.ones((self.__ny, self.__nx), dtype=np.float64)
+        self.Esum = np.zeros((self.__ny, self.__nx),dtype=np.float64)
+        self.U = np.zeros((self.__ny, self.__nx), dtype=np.float64)
         self.__Z = np.random.rand(self.__ny, self.__nx) * 10  # Elevation
         self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64) #Receiver grid
         self.k =  1e-6  # Erodibility
@@ -61,6 +70,7 @@ class simple_model:
         self.__BCX[:, -1] = 1
         self.__BCX[0, :] = 1
         self.__BCX[-1, :] = 1
+
 
         self.stackij = np.zeros(0,dtype=np.int64)
 
@@ -218,6 +228,8 @@ class simple_model:
             if len(self.k_grid)>0:
                 self.k_grid = np.zeros((ny, nx), dtype=np.float64) + self.k
                 print("k grid resized and reset to default k value")
+            self.U = np.zeros(np.shape(self.__Z))
+
 
             self.slps = np.zeros((ny, nx), dtype=np.float64)
     
@@ -272,41 +284,6 @@ class simple_model:
                     if mxi == 0:
                         c += 1
         return c
-
-
-    # def slp_basin(self):
-    #     """
-    #     This is a version of the D8 network calculation which excludes adding receivers to
-    #     the stack which are at or below 0 elevation - ideal for basins in which we want to
-    #     remove elements of the landscape that are not part of the basin of interest.
-    #     """
-    #     ij = 0
-    #     c = 0
-    #     fnd = np.zeros((self.__ny, self.__nx))
-    #     self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64)
-    #     if self.__dynamic_bc: #We must do this at every step to ensure we have the BCs, the computational cost is low...
-    #         self.turn_on_off_dynamic_bc(True)
-    #     for i in range(0, self.__ny):
-    #         for j in range(0, self.__nx):
-    #             ij = j * self.__ny + i
-    #             mxi = 0
-    #             self.receiver[i, j] = ij
-    #             if 0 < i < self.__ny and 0 < j < self.__nx - 1 and i < self.__ny - 1 and self.Z[i,j]>=0:
-    #                 for i1 in range(-1, 2):
-    #                     for j1 in range(-1, 2):
-    #                         if self.__Z[i + i1, j + j1] > 0:
-    #                             mp = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / np.sqrt(
-    #                                 (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2 + 1e-10)
-    #                             if mp > mxi:
-    #                                 ij2 = (j + j1) * self.__ny + i1 + i
-    #                                 mxi = mp
-    #                                 self.slps[i, j] = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / np.sqrt(
-    #                                     (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2 + 1e-10)
-    #                                 self.receiver[i, j] = ij2
-    #                 if mxi == 0:
-    #                     c += 1
-    #                     fnd[i, j] = 1
-    #     return fnd
 
     def stack(self):
         """
@@ -367,7 +344,8 @@ class simple_model:
         """
         Erode using fastscape method
         """
-        converge_thres = 1e-8
+        converge_thres = 1e-9 # min elevation err within 1 timestep
+        converge_thres_sed = 1e-7#self.k/np.sqrt(self.n)*self.dt/1e2 # for now this seems reasonable based on the inputs
 
         dA = (self.dx * self.dy) ** self.m
         if self.n == 1:
@@ -379,32 +357,70 @@ class simple_model:
         useKGrid = False
         if len(self.k_grid)  > 0:
             useKGrid = True
-        for ij in range(0, len(self.stackij)):
+        max_iter = 1
+        if self.G>0:
+            max_iter = 10 #max iterations for convergence
+        sumsedi = np.zeros(np.shape(self.__Z))
+        sumsed = np.zeros(np.shape(self.__Z))
+        sumsed2 = np.zeros(np.shape(self.__Z))
+        Zi = self.__Z.copy()
+        for iter in range(max_iter):
+            sumsedi = sumsed.copy()
+            self.__Z = Zi.copy()
+            for ij in range(len(self.stackij)):
+                i, j = self.lind(self.stackij[ij], self.__ny)
+                i2, j2 = self.lind(self.receiver[i, j], self.__ny)
+                if self.A[i,j] >= self.a_crit:
+                    if useKGrid: #If we use variable k in a grid....
+                        k = self.k_grid[i2, j2]
+                    if (i2 != i) | (j2 != j):
+                        dx = np.sqrt((float(i2 - i) * self.dy) ** 2 + (
+                            float(j2 - j) * self.dx) ** 2)
+                        f = k * dA * self.A[i, j] ** self.m * self.dt * \
+                            (self.__Z[i, j] - self.__Z[i2, j2])**(self.n - 1) / dx ** self.n 
+                        f2 = k * dA * self.A[i, j] ** self.m * self.dt/dx**self.n
+                        x = 100
+                        xl = 99999
+                        ni = 1
+                        c1 = self.__Z[i2,j2] - self.__Z[i,j]
+                        c2 = self.G / ( self.A[i, j] ) * (sumsed[i, j] - sumsed2[i,j])
+                        c3 = self.U[i,j] * self.dt
+                        c = c1 - c2 - c3 
+                        while np.abs(x - xl) > converge_thres:
+                            xl = x
+                            x = x - (x + f2 * x ** self.n + c ) / \
+                                (1 + self.n * f2 * x ** (self.n - 1.0 ))
+                            ni += 1
+                            if ni >=100:
+                                print('bad')
+                                print(np.abs(x - xl) )
+                                break
+                        
+                        zi = self.__Z[i, j]
+                        self.__Z[i,j] = x + self.__Z[i2,j2]
+                        sumsed2[i,j] = zi - self.__Z[i,j]
 
-            i, j = self.lind(self.stackij[ij], self.__ny)
-            i2, j2 = self.lind(self.receiver[i, j], self.__ny)
-            if useKGrid: #If we use variable k in a grid....
-               k = self.k_grid[i2, j2]
-            if (i2 != i) | (j2 != j):
-                dx = np.sqrt((float(i2 - i) * self.dy) ** 2 + (
-                    float(j2 - j) * self.dx) ** 2)
-                f = k * dA * self.A[i, j] ** self.m * self.dt * \
-                    (self.__Z[i, j] - self.__Z[i2, j2])**(self.n - 1) / dx ** self.n
-                x = 1
-                xl = 99999
-                ni = 1
-                while np.abs(xl - x) / x > converge_thres:
-                    xl = x
-                    x = x - (x - 1 + f * x ** self.n ) / \
-                        (1 + self.n * f * x ** (self.n - 1 ))
-                    ni += 1
-                
-                self.__Z[i, j] = self.__Z[i2, j2] + x * \
-                    (self.__Z[i, j] - self.__Z[i2, j2])
-                if self.__Z[i,j]<=0:
-                    self.__Z[i,j] = 0
+                        if self.__Z[i,j]<=0:
+                            self.__Z[i,j] = 0
+            sumsed = sumsed2.copy()  
+            for ij in range(len(self.stackij)-1,0,-1):
+                i, j = self.lind(self.stackij[ij], self.__ny)
+                i2, j2 = self.lind(self.receiver[i, j], self.__ny)
+                if (i2!=i) | (j2!=j):
+                    sumsed[i2, j2] += max([0,sumsed[i, j]])#np.abs(sumsed[i, j])/2 + sumsed[i, j]/2
+            #sumsed2[:] = 0
+            diffsed = np.mean(np.abs(sumsed - sumsedi))
+            
+            if diffsed < converge_thres_sed: # for now this seems a decent dynamic threshold...
+                break
+        self.Esum +=  Zi - self.__Z  + self.U * self.dt
+        self.Esum[:,0]=0
+        self.Esum[:,-1]=0
+        self.Esum[-1,:]=0
+        self.Esum[0,:]=0
+        return sumsed
 
-    def erode_explicit(self, a_crit:float64=0):
+    def erode_explicit(self):
         """
         Erode using explicit method
 
@@ -415,20 +431,25 @@ class simple_model:
         useKGrid = False
         if len(self.k_grid > 0):
             useKGrid = True
-        for ij in range(0, len(self.stackij)):
+        sumseds = np.zeros((self.__ny, self.__nx))
+        for ij in range(len(self.stackij) -1,0 ,-1):
 
             i, j = self.lind(self.stackij[ij], self.__ny)
             i2, j2 = self.lind(self.receiver[i, j], self.__ny)
             if  useKGrid: #If we use variable k in a grid...
                 k = self.k_grid[i2, j2]
             if (i2 != i) | (j2 != j):
-                if self.A[i, j] > a_crit:
+                if self.A[i, j] > self.a_crit:
                     f = self.dt * (self.dx * self.dy) ** self.m
                     E[i, j] = k * f * \
-                       self.A[i, j] ** self.m * self.slps[i, j]** self.n
-        self.__Z -= E
+                       self.A[i, j] ** self.m * self.slps[i, j]** self.n \
+                        - self.G/self.A[i,j] * sumseds[i,j]
+                sumseds[i2,j2] += sumseds[i,j] + E[i, j]
+        self.Esum += E
+        self.__Z -= E 
+        self.__Z += self.U * self.dt
 
-        return E
+        return sumseds
 
     def chicalc(self, U1:float64=1.0, elev_fact=0):
         """
@@ -439,16 +460,15 @@ class simple_model:
 
         self.chi = np.zeros((self.__ny, self.__nx), dtype=np.float64)
         dA = (self.dx * self.dy) ** self.m
-        U = np.ones((self.__ny, self.__nx))
-        U[:, :] = U1
+
         for ij in range(len(self.I)):
             i, j = self.lind(self.I[ij], self.__ny)
             i2, j2 = self.lind(self.s[i, j], self.__ny)
             ds = np.sqrt(((i - i2) * self.dy)**2 + ((j - j2) * self.dx)**2)
             if (self.s[i2, j2] == self.s[i, j]):
-                self.chi[i, j] = self.Z[i, j] * elev_fact
+                self.chi[i, j] = self.__Z[i, j] * elev_fact
             else:
-                self.chi[i, j] = U[i, j] / (self.A[i, j] ** self.m * dA) * ds
+                self.chi[i, j] = U1 / (self.A[i, j] ** self.m * dA) * ds
                 self.chi[i, j] += self.chi[i2, j2]
         return
 
