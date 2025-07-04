@@ -3,6 +3,7 @@ import numpy as np
 import sys
 sys.path.append("./python/")
 # Import the priority queue class
+
 from numba_pq import PQ
 import sys
 import matplotlib.pyplot as plt

@@ -3,7 +3,6 @@ from numba.experimental import jitclass
 from numba import jit, int64, float64, bool_, int8
 import math
 from numba_pq import PQ as pq
-import warnings
 import matplotlib.pyplot as plt
 # Define jitclass parameters
 ### Todo - consistent row-major c style indexing
@@ -344,8 +343,8 @@ class simple_model:
         """
         Erode using fastscape method
         """
-        converge_thres = 1e-9 # min elevation err within 1 timestep
-        converge_thres_sed = 1e-7#self.k/np.sqrt(self.n)*self.dt/1e2 # for now this seems reasonable based on the inputs
+        converge_thres = 1e-8 # min elevation err within 1 timestep
+        converge_thres_sed = 1e-7 #self.k/np.sqrt(self.n)*self.dt/1e2 # for now this seems reasonable based on the inputs
 
         dA = (self.dx * self.dy) ** self.m
         if self.n == 1:
@@ -370,10 +369,10 @@ class simple_model:
             for ij in range(len(self.stackij)):
                 i, j = self.lind(self.stackij[ij], self.__ny)
                 i2, j2 = self.lind(self.receiver[i, j], self.__ny)
-                if self.A[i,j] >= self.a_crit:
+                if (i2 != i) | (j2 != j):
                     if useKGrid: #If we use variable k in a grid....
                         k = self.k_grid[i2, j2]
-                    if (i2 != i) | (j2 != j):
+                    if self.A[i,j] >= self.a_crit:
                         dx = np.sqrt((float(i2 - i) * self.dy) ** 2 + (
                             float(j2 - j) * self.dx) ** 2)
                         f = k * dA * self.A[i, j] ** self.m * self.dt * \
@@ -392,9 +391,10 @@ class simple_model:
                                 (1 + self.n * f2 * x ** (self.n - 1.0 ))
                             ni += 1
                             if ni >=100:
-                                print('bad')
+                                print('Not Converged')
                                 print(np.abs(x - xl) )
                                 break
+                            
                         
                         zi = self.__Z[i, j]
                         self.__Z[i,j] = x + self.__Z[i2,j2]
@@ -402,6 +402,10 @@ class simple_model:
 
                         if self.__Z[i,j]<=0:
                             self.__Z[i,j] = 0
+                else:
+                    self.__Z[i,j] += self.U[i2,j2]*self.dt
+            
+            
             sumsed = sumsed2.copy()  
             for ij in range(len(self.stackij)-1,0,-1):
                 i, j = self.lind(self.stackij[ij], self.__ny)
@@ -413,6 +417,7 @@ class simple_model:
             
             if diffsed < converge_thres_sed: # for now this seems a decent dynamic threshold...
                 break
+
         self.Esum +=  Zi - self.__Z  + self.U * self.dt
         self.Esum[:,0]=0
         self.Esum[:,-1]=0
