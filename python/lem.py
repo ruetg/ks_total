@@ -25,7 +25,7 @@ spec = [
     ('stackij', int64[:]),
     ('U', float64),
     ('chi', float64[:, :]),
-    ('__BCX', int8[:, :]),
+    ('BCX', int8[:, :]),
     ('__BC', int64[:]),
     ('slps', float64[:, :]),
     ('pour_point', int64[:]),
@@ -64,11 +64,11 @@ class simple_model:
         self.k_grid = np.zeros((0 , 0))
         self.outlet = np.zeros((self.__ny,self.__nx))
         # Boundary condition grid, 0 = normal 1 = outlet
-        self.__BCX = np.zeros(np.shape(self.__Z), dtype=np.int8)
-        self.__BCX[:, 0] = 1  # by default set all edges as outlets
-        self.__BCX[:, -1] = 1
-        self.__BCX[0, :] = 1
-        self.__BCX[-1, :] = 1
+        self.BCX = np.zeros(np.shape(self.__Z), dtype=np.int8)
+        self.BCX[:, 0] = 1  # by default set all edges as outlets
+        self.BCX[:, -1] = 1
+        self.BCX[0, :] = 1
+        self.BCX[-1, :] = 1
 
 
         self.stackij = np.zeros(0,dtype=np.int64)
@@ -76,7 +76,7 @@ class simple_model:
         self.__dynamic_bc = False # dynamic baselevel
         # Convert the boundary condition grid to linear (for speed in some
         # cases)
-        self.__BC = np.where(self.__BCX.ravel() == 1)[0]
+        self.__BC = np.where(self.BCX.ravel() == 1)[0]
         self.pour_point = np.int64([-1,-1]) #Pour_point is an (y,x) coordinate of the pour point if applicable - for drainage extraction
 
 
@@ -108,11 +108,7 @@ class simple_model:
                         closed[ij] = True
                         open = open.push(ij)
                         c += 1
-        s = int(0)
-        si = int(0)
-        ij = int(0)
-        ii = int(0)
-        jj = int(0)
+
 
         pittop = int(-9999)
         count1 = 0
@@ -177,10 +173,10 @@ class simple_model:
             for i in range(1,self.__ny-1):
                 for j in range(1,self.__nx-1):
                     if self.__Z[i,j] <= 0:
-                        self.__BCX[i,j] = 1
+                        self.BCX[i,j] = 1
                     else:
-                        self.__BCX[i,j] = 0
-            self.__BC = np.where(self.__BCX.transpose().ravel() == 1)[0]
+                        self.BCX[i,j] = 0
+            self.__BC = np.where(self.BCX.transpose().ravel() == 1)[0]
 
         return
     
@@ -200,13 +196,13 @@ class simple_model:
             raise ValueError("Wrong size for Boundary Condition grid."
             " bc matrix must be same size as Z. Maybe you have not yet set Z?")
         if np.any(bc.ravel() > 0):
-            self.__BCX = np.zeros(np.shape(self.__Z), dtype=np.int8)
+            self.BCX = np.zeros(np.shape(self.__Z), dtype=np.int8)
             # Have to do this loop because of unresolved type casting issues with numba and int8
             for i in range(ny):
                 for j in range(nx):
                     if bc[i,j] > 0:
-                        self.__BCX[i,j] = 1
-            self.__BC = np.where(self.__BCX.ravel() == 1)[0]
+                        self.BCX[i,j] = 1
+            self.__BC = np.where(self.BCX.ravel() == 1)[0]
 
         return
 
@@ -232,13 +228,13 @@ class simple_model:
 
             self.slps = np.zeros((ny, nx), dtype=np.float64)
     
-            self.__BCX = np.zeros((ny, nx), dtype=np.int8)
-            self.__BCX[:, 0] = 1
-            self.__BCX[:, -1] = 1
-            self.__BCX[0, :] = 1
-            self.__BCX[-1, :] = 1
+            self.BCX = np.zeros((ny, nx), dtype=np.int8)
+            self.BCX[:, 0] = 1
+            self.BCX[:, -1] = 1
+            self.BCX[0, :] = 1
+            self.BCX[-1, :] = 1
 
-            self.set_bc(self.__BCX)
+            self.set_bc(self.BCX)
             print('Boundary condition values have been reset')
 
         self.__ny = ny
@@ -266,7 +262,7 @@ class simple_model:
                 self.receiver[i, j] = ij
 
                 if (0 < i < self.__ny and j > 0 and j <
-                        self.__nx - 1 and i < self.__ny - 1 and not self.__BCX[i,j]
+                        self.__nx - 1 and i < self.__ny - 1 and not self.BCX[i,j]
                           and not(np.isnan(self.__Z[i,j]))):
                     for i1 in range(-1, 2):
                         for j1 in range(-1, 2):
@@ -343,7 +339,7 @@ class simple_model:
         """
         Erode using fastscape method
         """
-        converge_thres = 1e-8 # min elevation err within 1 timestep
+        converge_thres = 1e-7 # min elevation err within 1 timestep
         converge_thres_sed = 1e-7 #self.k/np.sqrt(self.n)*self.dt/1e2 # for now this seems reasonable based on the inputs
 
         dA = (self.dx * self.dy) ** self.m
