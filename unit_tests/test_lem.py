@@ -2,6 +2,8 @@ import unittest
 import numpy as np
 import sys
 sys.path.append('../python')
+sys.path.append('./python')
+
 from lem import simple_model  
 import math
 import matplotlib.pyplot as plt
@@ -30,7 +32,7 @@ class TestLandscapeEvolution(unittest.TestCase):
         bc_data[:, 0] = 1
         self.assertTrue(bc_data.shape == np.shape(self.model.get_z()))
         self.model.set_bc(bc_data)
-        self.assertTrue(np.allclose(self.model._simple_model__BCX , bc_data))
+        self.assertTrue(np.allclose(self.model.BCX , bc_data))
 
     def test_slp(self):
         # Test if it's working first with a large DEM

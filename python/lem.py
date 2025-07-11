@@ -35,6 +35,7 @@ spec = [
     ('a_crit', float64),
     ('U', float64[:,:]),
     ('Esum', float64[:,:]),
+    ('ero', float64[:, :]),
     ('G',float64)]
 
 
@@ -57,6 +58,7 @@ class simple_model:
         # Data Structures
         self.slps = np.ones((self.__ny, self.__nx), dtype=np.float64)
         self.Esum = np.zeros((self.__ny, self.__nx),dtype=np.float64)
+        self.ero = np.zeros((self.__ny, self.__nx),dtype=np.float64)
         self.U = np.zeros((self.__ny, self.__nx), dtype=np.float64)
         self.__Z = np.random.rand(self.__ny, self.__nx) * 10  # Elevation
         self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64) #Receiver grid
@@ -413,8 +415,8 @@ class simple_model:
             
             if diffsed < converge_thres_sed: # for now this seems a decent dynamic threshold...
                 break
-
-        self.Esum +=  Zi - self.__Z  + self.U * self.dt
+        self.ero = Zi - self.__Z  + self.U * self.dt
+        self.Esum +=  self.ero
         self.Esum[:,0]=0
         self.Esum[:,-1]=0
         self.Esum[-1,:]=0
@@ -447,6 +449,7 @@ class simple_model:
                         - self.G/self.A[i,j] * sumseds[i,j]
                 sumseds[i2,j2] += sumseds[i,j] + E[i, j]
         self.Esum += E
+        self.ero = E
         self.__Z -= E 
         self.__Z += self.U * self.dt
 
