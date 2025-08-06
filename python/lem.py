@@ -26,7 +26,6 @@ spec = [
     ('U', float64),
     ('chi', float64[:, :]),
     ('BCX', int8[:, :]),
-    ('__BC', int64[:]),
     ('slps', float64[:, :]),
     ('pour_point', int64[:]),
     ('D',float64),
@@ -36,6 +35,7 @@ spec = [
     ('U', float64[:,:]),
     ('Esum', float64[:,:]),
     ('ero', float64[:, :]),
+    ('layer_depth', float64[:, :]),
     ('G',float64)]
 
 
@@ -53,6 +53,7 @@ class simple_model:
         self.__nx = 500  # Number of x grid points
         self.__ny = 500  # Number of y grid points
         self.D = 0.1
+        self.layer_depth = np.zeros((self.__ny,self.__nx))
 
         self.a_crit = 0
         # Data Structures
@@ -78,7 +79,6 @@ class simple_model:
         self.__dynamic_bc = False # dynamic baselevel
         # Convert the boundary condition grid to linear (for speed in some
         # cases)
-        self.__BC = np.where(self.BCX.ravel() == 1)[0]
         self.pour_point = np.int64([-1,-1]) #Pour_point is an (y,x) coordinate of the pour point if applicable - for drainage extraction
 
 
@@ -86,7 +86,7 @@ class simple_model:
         """
         Fill pits using the priority flood method of Barnes et al., 2014.
         """
-        eps = 1e-7 #Minimum elevation difference between adjacent cells
+        eps = 1e-8 #Minimum elevation difference between adjacent cells
         c = int(0)
         nn = self.__nx * self.__ny
         p = int(0)
@@ -95,10 +95,13 @@ class simple_model:
         idx = [1, -1, self.__ny, -self.__ny, -self.__ny + 1, -self.__ny - 1,
                self.__ny + 1, self.__ny - 1]  # Linear indices of neighbors
         open = pq(self.__Z.transpose().flatten())
-        for i in range(len(self.__BC)):
-            open = open.push(self.__BC[i])
-            closed[self.__BC[i]] = True
-            c += 1
+        for i in range(self.__ny):
+            for j in range(self.__ny):
+                if self.BCX[i, j] == 1:
+                    ij = i + j * self.__ny
+                    open = open.push(ij)
+                    closed[ij] = True
+                c += 1
         for i in range(0, self.__ny):
             for j in range(0, self.__nx):
                 if (i == 0) or (j == 0) or (
@@ -171,14 +174,14 @@ class simple_model:
     def turn_on_off_dynamic_bc(self, dynamic_bc):
         self.__dynamic_bc = dynamic_bc
         #ny, nx = np.shape(self.__Z)
+        self.BCX[:,:]=0
         if self.__dynamic_bc:
             for i in range(1,self.__ny-1):
                 for j in range(1,self.__nx-1):
-                    if self.__Z[i,j] <= 0:
+                    if self.__Z[i,j] < 0:
                         self.BCX[i,j] = 1
                     else:
                         self.BCX[i,j] = 0
-            self.__BC = np.where(self.BCX.transpose().ravel() == 1)[0]
 
         return
     
@@ -204,7 +207,6 @@ class simple_model:
                 for j in range(nx):
                     if bc[i,j] > 0:
                         self.BCX[i,j] = 1
-            self.__BC = np.where(self.BCX.ravel() == 1)[0]
 
         return
 
@@ -250,7 +252,7 @@ class simple_model:
         """
         D8 slopes
         """
-        eps = 1e-20 # The e value for sinks i.e. dz from grid point to neighboring grid point within flats
+        eps = 1e-15
         ij = 0
         c = 0
         self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64)
@@ -279,7 +281,10 @@ class simple_model:
                                 self.receiver[i, j] = ij2
 
                     if mxi == 0:
+
+                        #self.BCX[i, j] = 5
                         c += 1
+        print(c)
         return c
 
     def stack(self):
@@ -356,8 +361,7 @@ class simple_model:
             useKGrid = True
         max_iter = 1
         if self.G>0:
-            max_iter = 10 #max iterations for convergence
-        sumsedi = np.zeros(np.shape(self.__Z))
+            max_iter = 100 #max iterations for convergence
         sumsed = np.zeros(np.shape(self.__Z))
         sumsed2 = np.zeros(np.shape(self.__Z))
         Zi = self.__Z.copy()
@@ -373,14 +377,14 @@ class simple_model:
                     if self.A[i,j] >= self.a_crit:
                         dx = np.sqrt((float(i2 - i) * self.dy) ** 2 + (
                             float(j2 - j) * self.dx) ** 2)
-                        f = k * dA * self.A[i, j] ** self.m * self.dt * \
-                            (self.__Z[i, j] - self.__Z[i2, j2])**(self.n - 1) / dx ** self.n 
+                        # f = k * dA * self.A[i, j] ** self.m * self.dt * \
+                        #     (self.__Z[i, j] - self.__Z[i2, j2])**(self.n - 1) / dx ** self.n
                         f2 = k * dA * self.A[i, j] ** self.m * self.dt/dx**self.n
                         x = 100
                         xl = 99999
                         ni = 1
                         c1 = self.__Z[i2,j2] - self.__Z[i,j]
-                        c2 = self.G / ( self.A[i, j] ) * (sumsed[i, j] - sumsed2[i,j])
+                        c2 = self.G / self.A[i, j]  * (sumsed[i, j] - sumsed2[i,j])
                         c3 = self.U[i,j] * self.dt
                         c = c1 - c2 - c3 
                         while np.abs(x - xl) > converge_thres:
@@ -393,10 +397,13 @@ class simple_model:
                                 print(np.abs(x - xl) )
                                 break
                             
-                        
+
                         zi = self.__Z[i, j]
                         self.__Z[i,j] = x + self.__Z[i2,j2]
-                        sumsed2[i,j] = zi - self.__Z[i,j]
+                        if (self.layer_depth[i,j]>0) & (Zi[i,j] - self.__Z[i,j] > self.layer_depth[i, j]):
+                            self.__Z[i,j] = Zi[i,j] - self.layer_depth[i, j]
+                        sumsed2[i,j] = Zi[i,j] - self.__Z[i,j]
+
 
                         if self.__Z[i,j]<=0:
                             self.__Z[i,j] = 0
@@ -415,6 +422,8 @@ class simple_model:
             
             if diffsed < converge_thres_sed: # for now this seems a decent dynamic threshold...
                 break
+        if (self.G>0) & (iter >= max_iter-1):
+            print('Not Converged')
         self.ero = Zi - self.__Z  + self.U * self.dt
         self.Esum +=  self.ero
         self.Esum[:,0]=0

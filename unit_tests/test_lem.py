@@ -140,9 +140,6 @@ class TestLandscapeEvolution(unittest.TestCase):
         self.assertTrue(np.allclose(E_fastscape, E_explicit))
 
 
-
-
-
     def test_erode_explicit(self):
         """Test the erode_explicit method against fs implicit erosion - should be similar for low dt """
         z = np.random.rand(500,500)*1
