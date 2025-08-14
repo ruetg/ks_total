@@ -86,14 +86,14 @@ class simple_model:
         """
         Fill pits using the priority flood method of Barnes et al., 2014.
         """
-        eps = 1e-8 #Minimum elevation difference between adjacent cells
+        eps = 1e-6 #Minimum elevation difference between adjacent cells
         c = int(0)
         nn = self.__nx * self.__ny
         p = int(0)
         closed = np.full(nn, False)
         pit = np.zeros(nn, dtype=np.int32)
-        idx = [1, -1, self.__ny, -self.__ny, -self.__ny + 1, -self.__ny - 1,
-               self.__ny + 1, self.__ny - 1]  # Linear indices of neighbors
+        idx = np.array([1, -1, self.__ny, -self.__ny, -self.__ny + 1, -self.__ny - 1,
+               self.__ny + 1, self.__ny - 1])  # Linear indices of neighbors
         open = pq(self.__Z.transpose().flatten())
         for i in range(self.__ny):
             for j in range(self.__ny):
@@ -102,8 +102,12 @@ class simple_model:
                     open = open.push(ij)
                     closed[ij] = True
                 c += 1
-        for i in range(0, self.__ny):
-            for j in range(0, self.__nx):
+        i_shuffle = np.arange(0, self.__ny)
+        j_shuffle = np.arange(0, self.__nx)
+        np.random.shuffle(j_shuffle)
+        np.random.shuffle(i_shuffle)
+        for i in i_shuffle:
+            for j in j_shuffle:
                 if (i == 0) or (j == 0) or (
                         j == self.__nx - 1) or (i == self.__ny - 1):
                     # In this case only edge cells, and those below sea level
@@ -139,7 +143,7 @@ class simple_model:
                 pittop = -9999
             si, sj = self.lind(s, self.__ny)  # Current
             count1 += 1
-
+            np.random.shuffle(idx)
             for i in range(8):
                 ij = idx[i] + s
                 ii, jj = self.lind(ij, self.__ny)  # Neighbor
@@ -151,7 +155,7 @@ class simple_model:
                             # This (e) is sufficiently small for most DEMs but
                             # it's not the lowest possible.  In case we are
                             # using 32 bit, I keep it here.
-                            self.__Z[ii, jj] = self.__Z[si, sj] + 1e-8 * np.random.rand() + eps #the e value with some randomness- we can adjust this
+                            self.__Z[ii, jj] = self.__Z[si, sj] + eps * np.random.rand() + eps #the e value with some randomness- we can adjust this
                             pit[p] = ij
                             p += 1
                         else:
@@ -252,15 +256,21 @@ class simple_model:
         """
         D8 slopes
         """
-        eps = 1e-15
+        eps = 1e-30
         ij = 0
         c = 0
+        irand2 = np.arange(-1, 2)
+        jrand2 = np.arange(-1, 2)
         self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64)
         if self.__dynamic_bc: #We must do this at every step to ensure we have the BCs, the computational cost is low...
             self.turn_on_off_dynamic_bc(True)
             print('here')
-        for i in range(0, self.__ny):
-            for j in range(0, self.__nx):
+        irand = np.arange(0, self.__ny)
+        jrand = np.arange(0, self.__nx)
+        np.random.shuffle(irand)
+        np.random.shuffle(jrand)
+        for i in irand:
+            for j in jrand:
                 ij = j * self.__ny + i
                 mxi = 0
                 self.receiver[i, j] = ij
@@ -268,8 +278,10 @@ class simple_model:
                 if (0 < i < self.__ny and j > 0 and j <
                         self.__nx - 1 and i < self.__ny - 1 and not self.BCX[i,j]
                           and not(np.isnan(self.__Z[i,j]))):
-                    for i1 in range(-1, 2):
-                        for j1 in range(-1, 2):
+                    np.random.shuffle(irand2)
+                    np.random.shuffle(jrand2)
+                    for i1 in irand2:
+                        for j1 in jrand2:
                             mp = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / (np.sqrt(
                                 (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2) + eps)  # In case slope if zero, we add eps to ensure no div by 0
                             if mp  > mxi: 
@@ -457,6 +469,7 @@ class simple_model:
                        self.A[i, j] ** self.m * self.slps[i, j]** self.n \
                         - self.G/self.A[i,j] * sumseds[i,j]
                 sumseds[i2,j2] += sumseds[i,j] + E[i, j]
+        E.ravel()[E.ravel()>self.layer_depth.ravel()] = self.layer_depth.ravel()[E.ravel()>self.layer_depth.ravel()]
         self.Esum += E
         self.ero = E
         self.__Z -= E 
@@ -518,3 +531,41 @@ class simple_model:
             t_tot += courant_t
             self.__Z -= E
         return E
+
+    def erode_sklar_experimental(self):
+        """
+        Erode using fastscape method
+        """
+        """
+             Erode using explicit method
+
+             :returns: erosion rate grid
+             """
+        E = np.zeros((self.__ny, self.__nx))
+        k = self.k
+        useKGrid = False
+        if len(self.k_grid > 0):
+            useKGrid = True
+        sumseds = np.zeros((self.__ny, self.__nx))
+        f = self.dt * (self.dx * self.dy) ** self.m
+
+        for ij in range(len(self.stackij) - 1, 0, -1):
+
+            i, j = self.lind(self.stackij[ij], self.__ny)
+            i2, j2 = self.lind(self.receiver[i, j], self.__ny)
+            if useKGrid:  # If we use variable k in a grid...
+                k = self.k_grid[i2, j2]
+            if (i2 != i) | (j2 != j):
+                e = k * f * self.A[i, j] ** self.m * self.slps[i, j] ** self.n
+                q =  self.G / self.A[i, j] * sumseds[i, j]
+                if q>e/2:
+                    E[i, j] = 2*(e-q)
+                else:
+                    E[i, j] = 1.9*q+0.05*e
+                sumseds[i2, j2] += sumseds[i, j] + E[i, j]
+        self.Esum += E
+        self.ero = E
+        self.__Z -= E
+        self.__Z += self.U * self.dt
+
+        return sumseds
