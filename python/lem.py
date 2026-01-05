@@ -102,7 +102,7 @@ class simple_model:
         """
         if self.__dynamic_bc: #We must do this at every step to ensure we have the BCs, the computational cost is low...
             self.turn_on_off_dynamic_bc(True)
-        eps = 1e-12 #Minimum elevation difference between adjacent cells
+        eps = 1e-6 #Minimum elevation difference between adjacent cells
         c = int(0)
         nn = self.__nx * self.__ny
         p = int(0)
@@ -286,8 +286,8 @@ class simple_model:
                 for j in range(self.__ny):
                     self.__Z[j, i] = self.watersurf[c2]
                     c2 += 1
-        eps = 1e-30
-        ij = 0
+        eps = 1e-15
+
         c = 0
         irand2 = np.arange(-1, 2)
         jrand2 = np.arange(-1, 2)
