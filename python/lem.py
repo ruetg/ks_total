@@ -1,4 +1,5 @@
 import numpy as np
+from dill.source import likely_import
 from numba.experimental import jitclass
 from numba import jit, int64, float64, bool_, int8
 import math
@@ -34,8 +35,16 @@ spec = [
     ('a_crit', float64),
     ('U', float64[:,:]),
     ('Esum', float64[:,:]),
+    ('tmp', float64[:,:]),
     ('ero', float64[:, :]),
     ('layer_depth', float64[:, :]),
+    ('G2',float64),
+    ('glacial_input',float64),
+    ('landsurf', float64[:]),
+    ('watersurf', float64[:]),
+    ('useprecip', bool_),
+    ('precip', float64),
+    ('evaprate',float64),
     ('G',float64)]
 
 
@@ -52,12 +61,15 @@ class simple_model:
         self.dt = 1e6  # Time step
         self.__nx = 500  # Number of x grid points
         self.__ny = 500  # Number of y grid points
-        self.D = 0.1
+        self.D = 0.01
         self.layer_depth = np.zeros((self.__ny,self.__nx))
-
+        self.G2 = .05
         self.a_crit = 0
         # Data Structures
         self.slps = np.ones((self.__ny, self.__nx), dtype=np.float64)
+        self.landsurf = np.zeros((self.__ny * self.__nx), dtype=np.float64)
+        self.precip = 1 #m/yr
+        self.evaprate = .5 #m/yr
         self.Esum = np.zeros((self.__ny, self.__nx),dtype=np.float64)
         self.ero = np.zeros((self.__ny, self.__nx),dtype=np.float64)
         self.U = np.zeros((self.__ny, self.__nx), dtype=np.float64)
@@ -68,13 +80,15 @@ class simple_model:
         self.outlet = np.zeros((self.__ny,self.__nx))
         # Boundary condition grid, 0 = normal 1 = outlet
         self.BCX = np.zeros(np.shape(self.__Z), dtype=np.int8)
+        self.glacial_input = 0.0
         self.BCX[:, 0] = 1  # by default set all edges as outlets
         self.BCX[:, -1] = 1
         self.BCX[0, :] = 1
         self.BCX[-1, :] = 1
-
-
+        self.ero = np.zeros(np.shape(self.__Z), dtype=np.float64)
+        self.watersurf = self.__Z.transpose().ravel()
         self.stackij = np.zeros(0,dtype=np.int64)
+        self.useprecip = False
 
         self.__dynamic_bc = False # dynamic baselevel
         # Convert the boundary condition grid to linear (for speed in some
@@ -86,7 +100,9 @@ class simple_model:
         """
         Fill pits using the priority flood method of Barnes et al., 2014.
         """
-        eps = 1e-6 #Minimum elevation difference between adjacent cells
+        if self.__dynamic_bc: #We must do this at every step to ensure we have the BCs, the computational cost is low...
+            self.turn_on_off_dynamic_bc(True)
+        eps = 1e-12 #Minimum elevation difference between adjacent cells
         c = int(0)
         nn = self.__nx * self.__ny
         p = int(0)
@@ -95,8 +111,10 @@ class simple_model:
         idx = np.array([1, -1, self.__ny, -self.__ny, -self.__ny + 1, -self.__ny - 1,
                self.__ny + 1, self.__ny - 1])  # Linear indices of neighbors
         open = pq(self.__Z.transpose().flatten())
+        Id1 = np.isnan(self.__Z.ravel())
+        self.__Z.ravel()[Id1] = 0.0
         for i in range(self.__ny):
-            for j in range(self.__ny):
+            for j in range(self.__nx):
                 if self.BCX[i, j] == 1:
                     ij = i + j * self.__ny
                     open = open.push(ij)
@@ -117,7 +135,6 @@ class simple_model:
                         closed[ij] = True
                         open = open.push(ij)
                         c += 1
-
 
         pittop = int(-9999)
         count1 = 0
@@ -161,6 +178,10 @@ class simple_model:
                         else:
                             open = open.push(ij)
                             c += 1
+       # self.landsurf[:] = self.__Z.transpose().ravel() #keep track of the initial grid
+        self.watersurf[:] = self.__Z.transpose().ravel()
+        self.__Z.ravel()[Id1] = np.nan
+
         return
 
     def lind(self, xy, n:float64):
@@ -198,9 +219,7 @@ class simple_model:
 
         """
         ny, nx = np.shape(bc)
-        print([ny,nx])
-        print(self.__ny,self.__nx)
-        print(np.shape(self.__Z))
+
         if (ny, nx) != np.shape(self.__Z):
             raise ValueError("Wrong size for Boundary Condition grid."
             " bc matrix must be same size as Z. Maybe you have not yet set Z?")
@@ -227,24 +246,28 @@ class simple_model:
             self.__Z = Z
         except:
             raise ValueError("Z is not np.float64")
+
         if (self.__ny, self.__nx) != (ny, nx):
             if len(self.k_grid)>0:
                 self.k_grid = np.zeros((ny, nx), dtype=np.float64) + self.k
                 print("k grid resized and reset to default k value")
             self.U = np.zeros(np.shape(self.__Z))
 
-
             self.slps = np.zeros((ny, nx), dtype=np.float64)
-    
+            print('resetting')
             self.BCX = np.zeros((ny, nx), dtype=np.int8)
             self.BCX[:, 0] = 1
             self.BCX[:, -1] = 1
             self.BCX[0, :] = 1
             self.BCX[-1, :] = 1
-
+            self.layer_depth = np.zeros((ny,nx), dtype=np.float64)
             self.set_bc(self.BCX)
-            print('Boundary condition values have been reset')
+            self.Esum = np.zeros((ny,nx),dtype=np.float64)
+            self.ero = np.zeros((ny, nx), dtype=np.float64)
 
+            self.landsurf = self.__Z.transpose().ravel()
+            print('Boundary condition values have been reset')
+            self.watersurf = self.landsurf.copy()
         self.__ny = ny
         self.__nx = nx
         
@@ -256,6 +279,13 @@ class simple_model:
         """
         D8 slopes
         """
+        if self.useprecip:
+            Zi = self.__Z.copy()
+            c2 = 0
+            for i in range(self.__nx):
+                for j in range(self.__ny):
+                    self.__Z[j, i] = self.watersurf[c2]
+                    c2 += 1
         eps = 1e-30
         ij = 0
         c = 0
@@ -264,11 +294,12 @@ class simple_model:
         self.receiver = np.zeros((self.__ny, self.__nx), dtype=np.int64)
         if self.__dynamic_bc: #We must do this at every step to ensure we have the BCs, the computational cost is low...
             self.turn_on_off_dynamic_bc(True)
-            print('here')
+            print('here1')
         irand = np.arange(0, self.__ny)
         jrand = np.arange(0, self.__nx)
-        np.random.shuffle(irand)
-        np.random.shuffle(jrand)
+        #np.random.shuffle(irand)
+       # np.random.shuffle(jrand)
+
         for i in irand:
             for j in jrand:
                 ij = j * self.__ny + i
@@ -284,19 +315,24 @@ class simple_model:
                         for j1 in jrand2:
                             mp = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / (np.sqrt(
                                 (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2) + eps)  # In case slope if zero, we add eps to ensure no div by 0
-                            if mp  > mxi: 
+                            if mp  > mxi:
                                 ij2 = (j + j1) * self.__ny + i1 + i
                                 mxi = mp
 
-                                self.slps[i, j] = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / np.sqrt(
-                                    (float(i1 * self.dy) ** 2) + float(j1 * self.dx) ** 2 + eps) 
+                                self.slps[i, j] = mp
                                 self.receiver[i, j] = ij2
 
                     if mxi == 0:
 
                         #self.BCX[i, j] = 5
                         c += 1
-        print(c)
+                    if self.BCX[i,j] > 0:
+                        if self.__Z[i,j] > 0:
+                            print(self.__Z[i,j])
+
+
+        if self.useprecip:
+            self.__Z = Zi.copy()
         return c
 
     def stack(self):
@@ -354,25 +390,162 @@ class simple_model:
             if self.stackij[ij] != self.receiver[i, j]:
                 self.A[i2, j2] += self.A[i, j]
 
+    def landsed(self):
+
+
+        self.landsurf[:] = self.__Z.transpose().ravel() #keep track of the initial grid
+        self.sinkfill()
+        ### We calculate what topology would look like with no rainfall to find sinks
+        self.watersurf[:] = self.landsurf[:]
+        self.slp()
+        self.stack()
+        nn = self.__ny * self.__nx
+
+        maxareasinkfill = 0
+
+        idx = np.int64([ 1, -1, -self.__ny, self.__ny, 1 + self.__ny, 1 - self.__ny , -1 + self.__ny, -1 - self.__ny])
+        precip = np.ones(nn) * self.precip * 1.0
+        sed = self.ero.transpose().ravel()
+
+        tsed = 0
+        nsink = 0
+        if self.useprecip:
+            uselandsed=3
+        else:
+            uselandsed=1
+
+        next1 = np.zeros(nn,dtype=np.int64)
+        sedlist = np.zeros(nn,dtype=np.int64)
+        usedr = np.zeros(nn,dtype=np.bool_)
+        runoff = precip
+        sinkareas = np.zeros(nn)
+        Z = self.__Z.transpose().ravel()
+
+        # Update usedr array
+        for i in range( self.__ny ):
+            usedr[i] = True
+        for i in range(nn - self.__ny, nn):
+            usedr[i] = True
+        for i in range(self.__ny-1, nn, self.__ny):
+            usedr[i] = True
+        for i in range(0, nn, self.__ny):
+            usedr[i] = True
+
+        # Build cumulative sediment from ero and stream network
+        for i in range(nn-1, 0, -1):
+            i1,j1 = self.lind(self.stackij[i], self.__ny)
+            if self.receiver[i1,j1] != self.stackij[i]:
+                sed[self.receiver[i1,j1]] += sed[self.stackij[i]]
+                runoff[self.receiver[i1,j1]] += runoff[self.stackij[i]]
+        # Zero out sediment for non-sink areas
+        for i in range(nn):
+            i1, j1 = self.lind(self.stackij[i], self.__ny)
+            if self.receiver[i1,j1] != self.stackij[i]:
+                sed[self.stackij[i]] = 0
+                runoff[self.stackij[i]] = 0
+            else:
+                nsink += 1
+        tcount=0
+        # Process each cell
+        for i in range(nn):
+            i1, j1 = self.lind(self.stackij[i], self.__ny)
+
+            if (self.receiver[i1,j1] == self.stackij[i]) and (not(usedr[self.stackij[i]])):
+                nseds = [0]
+                massextra = [0.0]
+                massextra_precip = [0.0]
+                area = [0]
+                volume = [0.0]
+
+                self.recursivesed(self.stackij[i], sed, self.landsurf, Z, idx, usedr, sedlist, nseds, area, volume, massextra, massextra_precip, uselandsed,next1,runoff)
+                fact = 0
+                fact2 = 0
+                if massextra[0] >= volume[0]:
+                    fact = 1
+                elif volume[0] > 0:
+                    fact = massextra[0] / volume[0]
+                if massextra_precip[0] * self.dt + massextra[0] - self.evaprate * area[0] * self.dt >= volume[0]:
+                    fact2 = 1
+                elif massextra[0] < volume[0]:
+                    fact2 = max(0.0, (massextra_precip[0] * self.dt - self.evaprate * float(area[0]) * self.dt) / (volume[0] - massextra[0]))
+                if massextra_precip[0] ==0:
+                    tcount+=1
+               # print(massextra_precip)
+                for j in range(nseds[0]):
+                    i1,j1 = self.lind(sedlist[j], self.__ny)
+                    if sedlist[j] > nn or sedlist[j] < 0:
+                        print("Warning: bad access in recursive sedfill")
+                        break
+                    addsed = (Z[sedlist[j]] - self.landsurf[sedlist[j]]) * fact
+                    self.landsurf[sedlist[j]] += addsed
+                    self.ero[i1,j1] -= addsed
+                    addprecip = (Z[sedlist[j]] - self.landsurf[sedlist[j]]) * fact2
+
+                    self.watersurf[sedlist[j]] = self.landsurf[sedlist[j]] + addprecip
+                    sinkareas[sedlist[j]] = area[0]
+        # Update land surface based on sink areas
+        if maxareasinkfill >= 0:
+            for i in range(0, nn):
+                if sinkareas[i] < maxareasinkfill:
+                    self.landsurf[i] = Z[i]
+        c=0
+        for i in range(self.__nx):
+            for j in range(self.__ny):
+                self.__Z[j,i]= self.landsurf[c]
+                c+=1
+
+
+    def recursivesed(self,ij, sed, landsurf, Z, idx, usedr, sedlist, nseds, area, volume, massextra, massextra_precip, uselandsed,next1,runoff):
+        usedr[ij] = True
+        c = 0
+        go = True
+
+        while go:
+
+            sedlist[nseds[0]] = ij
+            nseds[0] += 1
+            for i in range(8):
+
+                if (landsurf[idx[i] + ij] < Z[idx[i] + ij]) and (not(usedr[idx[i] + ij])):
+
+                    next1[c] = idx[i] + ij
+                    usedr[idx[i] + ij] = True
+                    c += 1
+
+            volume[0] += (Z[ij] - landsurf[ij])
+            area[0] += 1
+
+            if uselandsed == 1:
+                massextra[0] += sed[ij]
+            elif uselandsed == 2:
+                massextra_precip[0] += runoff[ij]
+            elif uselandsed == 3:
+                massextra[0] += sed[ij]
+                massextra_precip[0] += runoff[ij]
+
+            c -= 1
+            if c >= -5:
+                ij = next1[c]
+            else:
+                go = False
     def erode(self):
         """
         Erode using fastscape method
         """
-        converge_thres = 1e-7 # min elevation err within 1 timestep
-        converge_thres_sed = 1e-7 #self.k/np.sqrt(self.n)*self.dt/1e2 # for now this seems reasonable based on the inputs
+        converge_thres = 1e-9 # min elevation err within 1 timestep
+        converge_thres_sed = 1e-9 #self.k/np.sqrt(self.n)*self.dt/1e2 # for now this seems reasonable based on the inputs
 
         dA = (self.dx * self.dy) ** self.m
         if self.n == 1:
             ni = 1
         else:
             ni = 5
-
         k = self.k
         useKGrid = False
         if len(self.k_grid)  > 0:
             useKGrid = True
         max_iter = 1
-        if self.G>0:
+        if self.G > 0:
             max_iter = 100 #max iterations for convergence
         sumsed = np.zeros(np.shape(self.__Z))
         sumsed2 = np.zeros(np.shape(self.__Z))
@@ -401,8 +574,11 @@ class simple_model:
                         c = c1 - c2 - c3 
                         while np.abs(x - xl) > converge_thres:
                             xl = x
+                            if x<0:
+                                x=0
                             x = x - (x + f2 * x ** self.n + c ) / \
                                 (1 + self.n * f2 * x ** (self.n - 1.0 ))
+
                             ni += 1
                             if ni >=100:
                                 print('Not Converged')
@@ -410,14 +586,18 @@ class simple_model:
                                 break
                             
 
-                        zi = self.__Z[i, j]
                         self.__Z[i,j] = x + self.__Z[i2,j2]
                         if (self.layer_depth[i,j]>0) & (Zi[i,j] - self.__Z[i,j] > self.layer_depth[i, j]):
                             self.__Z[i,j] = Zi[i,j] - self.layer_depth[i, j]
                         sumsed2[i,j] = Zi[i,j] - self.__Z[i,j]
 
+                        #In case their is <0 slopes
+                        if self.G==0:
+                            if sumsed2[i,j] < 0:
+                                self.__Z[i,j] = Zi[i,j]
+                                sumsed2[i, j] = 0
 
-                        if self.__Z[i,j]<=0:
+                        if self.__Z[i,j] <= 0:
                             self.__Z[i,j] = 0
                 else:
                     self.__Z[i,j] += self.U[i2,j2]*self.dt
@@ -429,7 +609,6 @@ class simple_model:
                 i2, j2 = self.lind(self.receiver[i, j], self.__ny)
                 if (i2!=i) | (j2!=j):
                     sumsed[i2, j2] += max([0,sumsed[i, j]])#np.abs(sumsed[i, j])/2 + sumsed[i, j]/2
-            #sumsed2[:] = 0
             diffsed = np.mean(np.abs(sumsed - sumsedi))
             
             if diffsed < converge_thres_sed: # for now this seems a decent dynamic threshold...
@@ -469,7 +648,8 @@ class simple_model:
                        self.A[i, j] ** self.m * self.slps[i, j]** self.n \
                         - self.G/self.A[i,j] * sumseds[i,j]
                 sumseds[i2,j2] += sumseds[i,j] + E[i, j]
-        E.ravel()[E.ravel()>self.layer_depth.ravel()] = self.layer_depth.ravel()[E.ravel()>self.layer_depth.ravel()]
+        I = (E.ravel()>self.layer_depth.ravel()) & (self.layer_depth.ravel()>1)
+        E.ravel()[I] = self.layer_depth.ravel()[I]
         self.Esum += E
         self.ero = E
         self.__Z -= E 
@@ -487,11 +667,11 @@ class simple_model:
         self.chi = np.zeros((self.__ny, self.__nx), dtype=np.float64)
         dA = (self.dx * self.dy) ** self.m
 
-        for ij in range(len(self.I)):
-            i, j = self.lind(self.I[ij], self.__ny)
-            i2, j2 = self.lind(self.s[i, j], self.__ny)
+        for ij in range(len(self.stackij)):
+            i, j = self.lind(self.stackij[ij], self.__ny)
+            i2, j2 = self.lind(self.receiver[i,j], self.__ny)
             ds = np.sqrt(((i - i2) * self.dy)**2 + ((j - j2) * self.dx)**2)
-            if (self.s[i2, j2] == self.s[i, j]):
+            if (self.receiver[i2, j2] == self.receiver[i,j]):
                 self.chi[i, j] = self.__Z[i, j] * elev_fact
             else:
                 self.chi[i, j] = U1 / (self.A[i, j] ** self.m * dA) * ds
@@ -500,7 +680,7 @@ class simple_model:
 
     def diffusion(self):
         """
-        Explicit diffusion for hillslopes
+        Explicit diffusion for hillslopes and maybe subsurface processes
 
         :param D: Diffusivity
 
@@ -512,6 +692,7 @@ class simple_model:
         t_tot = 0
 
         while t_tot < self.dt:
+            print('t')
             for i in range(1, ny - 1):
                 for j in range(1, nx - 1):
                     zijp = Z[i, j + 1]
@@ -530,6 +711,7 @@ class simple_model:
             E *= courant_t
             t_tot += courant_t
             self.__Z -= E
+            #self.ero += E
         return E
 
     def erode_sklar_experimental(self):
@@ -548,6 +730,8 @@ class simple_model:
             useKGrid = True
         sumseds = np.zeros((self.__ny, self.__nx))
         f = self.dt * (self.dx * self.dy) ** self.m
+        es = np.zeros((self.__ny, self.__nx))
+        self.tmp = np.zeros((self.__ny, self.__nx))
 
         for ij in range(len(self.stackij) - 1, 0, -1):
 
@@ -558,12 +742,23 @@ class simple_model:
             if (i2 != i) | (j2 != j):
                 e = k * f * self.A[i, j] ** self.m * self.slps[i, j] ** self.n
                 q =  self.G / self.A[i, j] * sumseds[i, j]
-                if q>e/2:
-                    E[i, j] = 2*(e-q)
+                if (q > e / 2) & (q < e):
+                    E[i, j] = 2 * (e - q)
+                elif q > e:
+
+                    E[i, j] = e - q
                 else:
-                    E[i, j] = 1.9*q+0.05*e
-                sumseds[i2, j2] += sumseds[i, j] + E[i, j]
-        self.Esum += E
+                    E[i, j] =  (2 - self.G2) * q
+                if 1:#self.A[i,j] == 1:
+                    E[i,j] += self.G2 * e / 2
+                    if self.glacial_input>0:
+                        if self.A[i,j] == 1:
+                            E[i,j] += self.glacial_input
+                es[i,j] = e
+               # sumseds[i, j] += E[i, j]
+                sumseds[i2, j2] += E[i,j] #sumseds[i, j]
+            self.Esum[i,j] = sumseds[i, j] #/(self.A+1e-10)
+        self.tmp = es.copy()
         self.ero = E
         self.__Z -= E
         self.__Z += self.U * self.dt

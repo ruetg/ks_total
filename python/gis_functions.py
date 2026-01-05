@@ -29,7 +29,13 @@ def snap_pourpoint(acc, basin_y, basin_x, pt_y, pt_x, target_area, dA, search_ar
     A1 = 0
     w = 1
     m, n = np.shape(acc)
+    print(A1)
+    print(target_area)
     while A1 < target_area:
+        if (x-w<0) | (x+w+1>=n) | (y-w<0) | (y+w+1>=m):
+
+            break
+
         ny, nx = np.where(acc[y - w:y + w + 1, x - w:x + w + 1] >= np.max(
             acc[y - w:y + w + 1, x - w:x + w + 1]) / 1.25)  # We find the closest point within the min
         print('here')
@@ -85,8 +91,14 @@ def generate_pour_point_catchment(filenm, outnm, pt, fillsink=True, target_area=
     DEM.dx = dx
     DEM.dy = dy
     if fillsink:
+        Z = DEM.get_z().copy()
+        Z[np.isnan(Z)] = -9999
+        DEM.set_z(Z)
         print('Filling DEM')
         DEM.sinkfill()
+        Z = DEM.get_z()
+        Z[Z<=0] = np.nan
+        DEM.set_z(Z)
     Z = DEM.get_z()
     Z[Z <= 1] = np.nan
     DEM.set_z(Z.copy())
