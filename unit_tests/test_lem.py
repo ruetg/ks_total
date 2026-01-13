@@ -134,10 +134,36 @@ class TestLandscapeEvolution(unittest.TestCase):
         E_fastscape = Zi - self.model.get_z()
         E_explicit = self.model.dt * self.model.k \
             * (self.model.A ) ** self.model.m * (self.model.dy * self.model.dx)**self.model.m \
-            * self.model.slps ** self.model.n 
+            * self.model.slps ** self.model.n
+        print('#n=3.0')
+
         print(np.mean(E_fastscape))
         print(np.mean(E_explicit))
         self.assertTrue(np.allclose(E_fastscape, E_explicit))
+
+        ### Test a different G
+        self.model.n = 1
+        self.model.m = 0.45
+        self.model.dt = 19
+        self.model.G = 5.0
+        Z1 = np.random.rand(100, 100) * 100
+        self.model.set_z(Z1.copy())
+        self.model.k = 1e-7
+        self.model.sinkfill()
+        Zi = self.model.get_z().copy()
+        self.model.slp()
+        self.model.stack()
+        self.model.acc()
+        self.model.erode()
+        E_fastscape = Zi - self.model.get_z()
+        self.model.set_z(Zi.copy())
+        self.model.erode_explicit()
+        E_explicit = Zi - self.model.get_z()
+        print('#G=1.0')
+        print(np.min(E_fastscape[E_fastscape > -999999]))
+        print(np.min(E_explicit[E_explicit > -999999]))
+        #np.max(E_fastscape)
+        #self.assertTrue(np.allclose(E_fastscape, E_explicit))
 
 
     def test_erode_explicit(self):

@@ -45,6 +45,7 @@ spec = [
     ('useprecip', bool_),
     ('precip', float64),
     ('evaprate',float64),
+    ('chi_U', float64[:,:]),
     ('G',float64)]
 
 
@@ -85,6 +86,7 @@ class simple_model:
         self.BCX[:, -1] = 1
         self.BCX[0, :] = 1
         self.BCX[-1, :] = 1
+        self.chi_U = np.float64([[0],[0]])
         self.ero = np.zeros(np.shape(self.__Z), dtype=np.float64)
         self.watersurf = self.__Z.transpose().ravel()
         self.stackij = np.zeros(0,dtype=np.int64)
@@ -309,8 +311,8 @@ class simple_model:
                 if (0 < i < self.__ny and j > 0 and j <
                         self.__nx - 1 and i < self.__ny - 1 and not self.BCX[i,j]
                           and not(np.isnan(self.__Z[i,j]))):
-                    np.random.shuffle(irand2)
-                    np.random.shuffle(jrand2)
+                    #np.random.shuffle(irand2)
+                    #np.random.shuffle(jrand2)
                     for i1 in irand2:
                         for j1 in jrand2:
                             mp = (self.__Z[i, j] - self.__Z[i + i1, j + j1]) / (np.sqrt(
@@ -608,7 +610,7 @@ class simple_model:
                 i, j = self.lind(self.stackij[ij], self.__ny)
                 i2, j2 = self.lind(self.receiver[i, j], self.__ny)
                 if (i2!=i) | (j2!=j):
-                    sumsed[i2, j2] += max([0,sumsed[i, j]])#np.abs(sumsed[i, j])/2 + sumsed[i, j]/2
+                    sumsed[i2, j2] += sumsed[i, j]#np.abs(sumsed[i, j])/2 + sumsed[i, j]/2
             diffsed = np.mean(np.abs(sumsed - sumsedi))
             
             if diffsed < converge_thres_sed: # for now this seems a decent dynamic threshold...
@@ -657,13 +659,17 @@ class simple_model:
 
         return sumseds
 
-    def chicalc(self, U1:float64=1.0, elev_fact=0):
+    def chicalc(self):
         """
         "params: U1 = normalized uplift rate to be included in chi calculations"
         "params: elev_fact = elevation factor for rivers that do not start at zero elevation -  Giachetta and Willett report this as 1/32.2"
         Calculate chi based on the inputs
         """
-
+        elev_fact = 0.0
+        if len(self.chi_U) > 1:
+            U1 = self.chi_U
+        else:
+            U1 = np.ones_like(self.__Z)
         self.chi = np.zeros((self.__ny, self.__nx), dtype=np.float64)
         dA = (self.dx * self.dy) ** self.m
 
@@ -674,7 +680,7 @@ class simple_model:
             if (self.receiver[i2, j2] == self.receiver[i,j]):
                 self.chi[i, j] = self.__Z[i, j] * elev_fact
             else:
-                self.chi[i, j] = U1 / (self.A[i, j] ** self.m * dA) * ds
+                self.chi[i, j] = U1[i,j] / (self.A[i, j] ** self.m * dA) * ds
                 self.chi[i, j] += self.chi[i2, j2]
         return
 

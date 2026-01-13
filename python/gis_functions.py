@@ -65,11 +65,13 @@ def generate_pour_point_catchment(filenm, outnm, pt, fillsink=True, target_area=
     acc: Acumulation grid
 
     """
+    b_side = True
     DEM = lem.simple_model()  # Initiate the grid object
     DEM.turn_on_off_dynamic_bc(
         False)  # This means that outlets are assigned, not dynamic i.e. everywhere below sea level.
     f = rio.open(filenm)  # File containing DEM
     Z = np.float64(np.squeeze(f.read()))
+    Z1=Z.copy()
     #
     #
     # Z[Z<=0]=np.nan
@@ -97,6 +99,7 @@ def generate_pour_point_catchment(filenm, outnm, pt, fillsink=True, target_area=
         print('Filling DEM')
         DEM.sinkfill()
         Z = DEM.get_z()
+        Z2=Z.copy()
         Z[Z<=0] = np.nan
         DEM.set_z(Z)
     Z = DEM.get_z()
@@ -116,7 +119,7 @@ def generate_pour_point_catchment(filenm, outnm, pt, fillsink=True, target_area=
     DEM.stack()
     DEM.acc()
     Z = np.zeros(np.shape(DEM.get_z())).ravel(order='F')
-    Zi = DEM.get_z().ravel(order='F')
+    Zi = Z1.ravel(order='F')
     for i in range(len(DEM.stackij)):
         Z[DEM.stackij[i]] = Zi[DEM.stackij[i]]
 
@@ -134,9 +137,35 @@ def generate_pour_point_catchment(filenm, outnm, pt, fillsink=True, target_area=
         data[data > 0] = 1
         mask = data != src.nodata
         transform = src.transform
+    if b_side: #do we also include the largest non-included catchment?)
+        Z2[data>0] = np.nan
+        acc[data>0] = 0
+        ppt = np.argmax(acc.ravel(order=
+                                 'F'))
+        yp = np.mod(ppt,m)
+        xp = np.floor(ppt/m)
+        DEM.pour_point = np.int64([yp, xp])
+        DEM.set_z(Z2.copy())
+        DEM.set_bc(np.zeros_like(Z))
+        print((yp,xp))
 
+        DEM.pour_point = np.int64([yp, xp])
+        DEM.slp()
+        DEM.stack()
+        DEM.acc()
+        Zi = Z1.ravel(order='F')
+        Z = np.zeros_like(Zi)
+        for i in range(len(DEM.stackij)):
+            Z[DEM.stackij[i]] = Zi[DEM.stackij[i]]
+        Z = Z.reshape(m, n, order='F')
+        Z[Z==0]=-9999
+        with rio.open(outnm + '_B.tif', 'w', **profile) as dst2:
+            dst2.write(Z.astype(rio.float64), 1)
+            print('writink')
     shapes_gen = shapes(data.astype(np.uint8), mask=mask, transform=transform)
     geoms = [shape(geom) for geom, value in shapes_gen if value == 1]
     df = gpd.GeoDataFrame(geometry=geoms).dissolve()
+
+
     # df.to_file(outnm)
     return df, acc
